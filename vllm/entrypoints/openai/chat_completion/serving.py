@@ -329,6 +329,7 @@ class OpenAIServingChat(OpenAIServing):
         for the API specification. This API mimics the OpenAI
         Chat Completion API.
         """
+        request_start_time = time.perf_counter()
         # Streaming response
         tokenizer = self.renderer.tokenizer
         assert tokenizer is not None
@@ -481,6 +482,7 @@ class OpenAIServingChat(OpenAIServing):
                 tokenizer,
                 request_metadata,
                 reasoning_parser,
+                request_start_time,
             )
 
         try:
@@ -493,6 +495,7 @@ class OpenAIServingChat(OpenAIServing):
                 tokenizer,
                 request_metadata,
                 reasoning_parser,
+                request_start_time,
             )
         except GenerationError as e:
             return self._convert_generation_error_to_response(e)
@@ -653,6 +656,7 @@ class OpenAIServingChat(OpenAIServing):
         tokenizer: TokenizerLike,
         request_metadata: RequestResponseMetadata,
         reasoning_parser: ReasoningParser | None = None,
+        request_start_time: float | None = None,
     ) -> AsyncGenerator[str, None]:
         from vllm.tokenizers.mistral import MistralTokenizer
 
@@ -742,6 +746,11 @@ class OpenAIServingChat(OpenAIServing):
                 # the result_generator, it needs to be sent as the FIRST
                 # response (by the try...catch).
                 if first_iteration:
+                    if request_start_time is not None:
+                        ttft = time.perf_counter() - request_start_time
+                        logger.info(
+                            "Streaming request %s: TTFT %.4f s",
+                            request_id, ttft)
                     num_cached_tokens = res.num_cached_tokens
                     # Send first response for each request.n (index) with
                     # the role
@@ -1386,6 +1395,11 @@ class OpenAIServingChat(OpenAIServing):
             logger.exception("Error in chat completion stream generator.")
             data = self.create_streaming_error_response(e)
             yield f"data: {data}\n\n"
+        if request_start_time is not None:
+            e2e_time = time.perf_counter() - request_start_time
+            logger.info(
+                "Streaming request %s: end-to-end time %.4f s",
+                request_id, e2e_time)
         # Send the final done message after all response.n are finished
         yield "data: [DONE]\n\n"
 
@@ -1399,14 +1413,22 @@ class OpenAIServingChat(OpenAIServing):
         tokenizer: TokenizerLike,
         request_metadata: RequestResponseMetadata,
         reasoning_parser: ReasoningParser | None = None,
+        request_start_time: float | None = None,
     ) -> ErrorResponse | ChatCompletionResponse:
         from vllm.tokenizers.mistral import MistralTokenizer
 
         created_time = int(time.time())
         final_res: RequestOutput | None = None
+        ttft_logged = False
 
         try:
             async for res in result_generator:
+                if not ttft_logged and request_start_time is not None:
+                    ttft = time.perf_counter() - request_start_time
+                    logger.info(
+                        "Non-streaming request %s: TTFT %.4f s",
+                        request_id, ttft)
+                    ttft_logged = True
                 final_res = res
         except asyncio.CancelledError:
             return self.create_error_response("Client disconnected")
@@ -1781,6 +1803,12 @@ class OpenAIServingChat(OpenAIServing):
                         is_streaming=False,
                         delta=False,
                     )
+
+        if request_start_time is not None:
+            e2e_time = time.perf_counter() - request_start_time
+            logger.info(
+                "Non-streaming request %s: end-to-end time %.4f s",
+                request_id, e2e_time)
 
         return response
 
