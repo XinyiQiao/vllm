@@ -515,6 +515,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
                         use_eagle=self.use_eagle,
                         alignment_tokens=self.lcm_block_size,
                     )
+                    print(f"Hit blocks {hit_blocks}")
                     curr_hit_length = len(hit_blocks[0]) * spec.block_size
                     for group_id, blocks in zip(group_ids, hit_blocks):
                         hit_blocks_by_group[group_id] = blocks
