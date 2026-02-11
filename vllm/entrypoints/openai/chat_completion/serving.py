@@ -748,9 +748,18 @@ class OpenAIServingChat(OpenAIServing):
                 if first_iteration:
                     if request_start_time is not None:
                         ttft = time.perf_counter() - request_start_time
+                        queued_time = 0.0
+                        prefill_time = 0.0
+                        if res.metrics is not None:
+                            queued_time = (res.metrics.scheduled_ts
+                                           - res.metrics.queued_ts)
+                            prefill_time = (res.metrics.first_token_ts
+                                            - res.metrics.scheduled_ts)
                         logger.info(
-                            "Streaming request %s: TTFT %.4f s",
-                            request_id, ttft)
+                            "Streaming request %s: TTFT %.4f s, "
+                            "queued %.4f s, prefill %.4f s",
+                            request_id, ttft,
+                            queued_time, prefill_time)
                     num_cached_tokens = res.num_cached_tokens
                     # Send first response for each request.n (index) with
                     # the role
@@ -1419,16 +1428,9 @@ class OpenAIServingChat(OpenAIServing):
 
         created_time = int(time.time())
         final_res: RequestOutput | None = None
-        ttft_logged = False
 
         try:
             async for res in result_generator:
-                if not ttft_logged and request_start_time is not None:
-                    ttft = time.perf_counter() - request_start_time
-                    logger.info(
-                        "Non-streaming request %s: TTFT %.4f s",
-                        request_id, ttft)
-                    ttft_logged = True
                 final_res = res
         except asyncio.CancelledError:
             return self.create_error_response("Client disconnected")
@@ -1436,6 +1438,16 @@ class OpenAIServingChat(OpenAIServing):
             return self.create_error_response(e)
 
         assert final_res is not None
+
+        if final_res.metrics is not None:
+            metrics = final_res.metrics
+            queued_time = metrics.scheduled_ts - metrics.queued_ts
+            prefill_time = metrics.first_token_ts - metrics.scheduled_ts
+            logger.info(
+                "Non-streaming request %s: TTFT %.4f s, "
+                "queued %.4f s, prefill %.4f s",
+                request_id, metrics.first_token_latency,
+                queued_time, prefill_time)
 
         choices: list[ChatCompletionResponseChoice] = []
         if self.tool_call_id_type == "kimi_k2":
